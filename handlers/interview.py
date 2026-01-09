@@ -93,26 +93,13 @@ async def interview_prep(callback: CallbackQuery):
     """Interview tayyorgarlik"""
     vacancy_id = callback.data.replace("interview_prep_", "")
     
-    # Vacancy ma'lumotlarini olish (Sessiyadan qidirsak tezroq bo'ladi, lekin DB ishonchli)
-    vacancy = None
+    # Vacancy ma'lumotlarini olish
+    vacancy = await db.get_vacancy(vacancy_id)
     
-    # 1. DB dan qidirish
-    try:
-        # TODO: DB metodini qo'shish kerak: get_vacancy_by_id
-        # Hozircha vacancy_id orqali contextdan qidiramiz
-        pass 
-    except:
-        pass
-        
-    if not vacancy:
-        # Fallback: Callback xabaridan 'title' ni olishga harakat qilish
-        # Yoki shunchaki umumiy HR savollarini berish
-        pass
-
-    # Hozircha sodda yechim: Vacancy title/description sessiyada bo'lmasa, umumiy savollar
-    # Yoki callback message textidan parse qilish
-    
-    text_to_analyze = callback.message.text or ""
+    if vacancy:
+        text_to_analyze = f"{vacancy.get('title', '')} {vacancy.get('description', '')}"
+    else:
+        text_to_analyze = callback.message.text or ""
     questions = get_questions_by_keyword(text_to_analyze)
     
     questions_text = "\n\n".join([f"❓ <b>{q}</b>" for q in questions])

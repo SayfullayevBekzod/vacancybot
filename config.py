@@ -8,20 +8,22 @@ load_dotenv()
 # Bot sozlamalari
 BOT_TOKEN = os.getenv('BOT_TOKEN')
 DATABASE_URL = os.getenv('DATABASE_URL')
-# # Database sozlamalari
 # DB_HOST = os.getenv('DB_HOST', 'localhost')
 # DB_PORT = int(os.getenv('DB_PORT', 5432))
 # DB_NAME = os.getenv('DB_NAME', 'vacancy_bot')
 # DB_USER = os.getenv('DB_USER', 'postgres')
 # DB_PASSWORD = os.getenv('DB_PASSWORD')
-
-# Database connection string
-# DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 if not BOT_TOKEN:
     raise ValueError("❌ BOT_TOKEN topilmadi!")
 
 if not DATABASE_URL:
     raise ValueError("❌ DATABASE_URL topilmadi!")
+# Timezone sozlamalari
+DEFAULT_TIMEZONE = timezone.utc  # UTC timezone
+# Database connection string fallback
+# if not DATABASE_URL:
+#     DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+
 # Timezone sozlamalari
 DEFAULT_TIMEZONE = timezone.utc  # UTC timezone
 
@@ -52,18 +54,18 @@ PAYMENT_INFO = {
 # Telegram kanallari (Premium foydalanuvchilar uchun)
 # Telegram kanallari (Premium foydalanuvchilar uchun)
 TELEGRAM_CHANNELS = [
-    '@vacancyuz',
-    '@itjobsuz',
-    '@uzdevjobs',
-    '@tashkent_jobs',
-    '@ish_uz',
-    '@ishbozor',
-    '@jobs_uz',
-    '@vacancy_uz',
+    '@UstozShogirdSohalar',
+    '@ishmi_ish',
+    '@techjobs_vakansiya',
+    '@vakansiyaa_ishbor',
+    '@freelancer_Uzbek',
+    '@freelance_uzb',
+    '@Uzgrad',
+    '@kasbim_uz',
     '@ish_topish',
     '@it_vacancy_uz',
     '@hr_uz',
-    '@rabota_uz'
+    '@UstozShogird'
 ]
 
 # Filtr sozlamalari
@@ -113,8 +115,8 @@ PREMIUM_PRICE = {
 
 # To'lov ma'lumotlari
 PAYMENT_INFO = {
-    'card_number': '8600 1234 5678 9012',
-    'card_holder': 'Ali Valiyev',
+    'card_number': '5614 6814 0308 5164',
+    'card_holder': 'Sayfullayev Bekzod',
     'support_username': 'SayfullayevBekzod'
 }
 
@@ -230,13 +232,14 @@ def validate_config():
         if "❌" in "\n".join(errors):
             raise ValueError("Majburiy konfiguratsiya parametrlari o'rnatilmagan!")
     
-    return True
     print(f"[CONFIG] Telegram scraper: {'✅ ENABLED' if TELEGRAM_ENABLED else '❌ DISABLED'}")
     if TELEGRAM_ENABLED:
         print(f"[CONFIG] Telegram channels: {len(TELEGRAM_CHANNELS)} configured")
     else:
         print("[CONFIG] Missing: TELEGRAM_API_ID, TELEGRAM_API_HASH, or TELEGRAM_PHONE in .env")
-        
+
+    return True
+
 # Konfiguratsiyani tekshirish
 if __name__ == '__main__':
     try:

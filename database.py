@@ -61,6 +61,7 @@ class Database:
                     is_active BOOLEAN DEFAULT TRUE,
                     premium_until TIMESTAMPTZ,
                     referred_by BIGINT,
+                    role VARCHAR(50) DEFAULT 'seeker',
                     created_at TIMESTAMPTZ DEFAULT NOW(),
                     updated_at TIMESTAMPTZ DEFAULT NOW()
                 )
@@ -116,8 +117,39 @@ class Database:
                     created_at TIMESTAMPTZ DEFAULT NOW()
                 )
             ''')
+
+            # Resumes jadvali (Seekers)
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS resumes (
+                    id SERIAL PRIMARY KEY,
+                    user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+                    full_name VARCHAR(255),
+                    age INTEGER,
+                    technology TEXT,
+                    telegram_username VARCHAR(255),
+                    phone VARCHAR(50),
+                    region VARCHAR(255),
+                    salary VARCHAR(255),
+                    profession VARCHAR(255),
+                    call_time VARCHAR(255),
+                    goal TEXT,
+                    created_at TIMESTAMPTZ DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            ''')
             
-            # Indexlar - OPTIMIZED
+            # Notification settings jadvali
+            await conn.execute('''
+                CREATE TABLE IF NOT EXISTS notification_settings (
+                    user_id BIGINT PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+                    enabled BOOLEAN DEFAULT TRUE,
+                    instant_notify BOOLEAN DEFAULT TRUE,
+                    daily_digest BOOLEAN DEFAULT FALSE,
+                    digest_time TIME DEFAULT '20:00:00',
+                    last_digest_sent TIMESTAMPTZ,
+                    updated_at TIMESTAMPTZ DEFAULT NOW()
+                )
+            ''')
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_users_premium ON users(premium_until)')
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by)')
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_users_active ON users(is_active) WHERE is_active = TRUE')
@@ -125,6 +157,8 @@ class Database:
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_sent_vacancies_vacancy ON sent_vacancies(vacancy_id)')
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_vacancies_published ON vacancies(published_date DESC)')
             await conn.execute('CREATE INDEX IF NOT EXISTS idx_vacancies_source ON vacancies(source)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_vacancies_location ON vacancies(location)')
+            await conn.execute('CREATE INDEX IF NOT EXISTS idx_vacancies_experience ON vacancies(experience_level)')
             
             # referred_by ustunini qo'shish (eski database uchun)
             try:
@@ -137,6 +171,54 @@ class Database:
     
     # ========== USER MANAGEMENT - OPTIMIZED ==========
     
+    async def add_resume(self, **kwargs):
+        """Rezyume qo'shish"""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute('''
+                    INSERT INTO resumes (
+                        user_id, full_name, age, technology, telegram_username, 
+                        phone, region, salary, profession, call_time, goal
+                    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                ''', 
+                kwargs['user_id'], kwargs['full_name'], kwargs['age'], kwargs['technology'],
+                kwargs['telegram_username'], kwargs['phone'], kwargs['region'], kwargs['salary'],
+                kwargs['profession'], kwargs['call_time'], kwargs['goal']
+                )
+                return True
+        except Exception as e:
+            logger.error(f"❌ add_resume xatolik: {e}")
+            return False
+
+    async def get_resumes(self, limit: int = 50, offset: int = 0) -> List[Dict]:
+        """Rezyumelarni olish"""
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch('''
+                    SELECT * FROM resumes 
+                    ORDER BY created_at DESC 
+                    LIMIT $1 OFFSET $2
+                ''', limit, offset)
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"❌ get_resumes xatolik: {e}")
+            return []
+
+    async def get_all_seekers_with_filters(self) -> List[Dict]:
+        """Barcha ish qidiruvchilarni filtrlari bilan olish"""
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch('''
+                    SELECT u.user_id, f.keywords, f.locations, f.salary_min, f.salary_max, f.experience_level
+                    FROM users u
+                    JOIN user_filters f ON u.user_id = f.user_id
+                    WHERE u.role = 'seeker' AND u.is_active = TRUE
+                ''')
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"❌ get_all_seekers_with_filters xatolik: {e}")
+            return []
+
     async def add_user(self, user_id: int, username: str = None, 
                       first_name: str = None, last_name: str = None):
         """Yangi foydalanuvchi qo'shish - OPTIMIZED"""
@@ -266,6 +348,10 @@ class Database:
     async def is_premium(self, user_id: int) -> bool:
         """Premium status - CACHED with index"""
         try:
+            from config import ADMIN_IDS
+            if user_id in ADMIN_IDS:
+                return True
+                
             now = datetime.now(timezone.utc)
             
             async with self.pool.acquire() as conn:
@@ -324,18 +410,54 @@ class Database:
             logger.error(f"❌ save_user_filter xatolik: {e}")
             return False
     
-    async def get_user_filter(self, user_id: int) -> Optional[Dict]:
-        """User filtrini olish"""
+    async def get_user_filter(self, user_id: int) -> Dict:
+        """User filtrini olish (Premium uchun Telegram-auto bilan)"""
         try:
             async with self.pool.acquire() as conn:
                 row = await conn.fetchrow(
                     'SELECT * FROM user_filters WHERE user_id = $1',
                     user_id
                 )
-                return dict(row) if row else None
+                
+                # Default filter
+                data = {
+                    'keywords': [],
+                    'locations': ['Tashkent'],
+                    'salary_min': None,
+                    'salary_max': None,
+                    'experience_level': 'not_specified',
+                    'sources': ['hh_uz', 'user_post']
+                }
+                
+                if row:
+                    data = dict(row)
+                
+                # Premium check and auto-source addition
+                is_premium = await self.is_premium(user_id)
+                if is_premium:
+                    # sources list bo'lishini ta'minlash
+                    if not data.get('sources'):
+                        data['sources'] = ['hh_uz', 'user_post', 'telegram']
+                    elif 'telegram' not in data['sources']:
+                        # convert if it was string for some reason (asyncpg usually returns list for ARRAY)
+                        data['sources'] = list(data['sources'])
+                        data['sources'].append('telegram')
+                else:
+                    # Non-premium shouldn't have telegram
+                    if data.get('sources') and 'telegram' in data['sources']:
+                        data['sources'] = [s for s in data['sources'] if s != 'telegram']
+                
+                return data
         except Exception as e:
             logger.error(f"❌ get_user_filter xatolik: {e}")
-            return None
+            return {
+                'keywords': [],
+                'locations': ['Tashkent'],
+                'salary_min': None,
+                'salary_max': None,
+                'experience_level': 'not_specified',
+                'sources': ['hh_uz', 'user_post']
+            }
     
     async def delete_user_filter(self, user_id: int):
         """User filtrini o'chirish"""
@@ -381,10 +503,23 @@ class Database:
         except Exception as e:
             logger.debug(f"add_vacancy: {e}")
             return None
+
+    async def get_vacancy(self, vacancy_id: str) -> Optional[Dict]:
+        """ID bo'yicha vakansiyani olish"""
+        try:
+            async with self.pool.acquire() as conn:
+                row = await conn.fetchrow(
+                    'SELECT * FROM vacancies WHERE vacancy_id = $1',
+                    vacancy_id
+                )
+                return dict(row) if row else None
+        except Exception as e:
+            logger.error(f"❌ get_vacancy xatolik: {e}")
+            return None
     
     # ========== SENT VACANCIES ==========
     
-    async def add_sent_vacancy(self, user_id: int, vacancy_id: str, vacancy_title: str):
+    async def mark_vacancy_sent(self, user_id: int, vacancy_id: str, vacancy_title: str = None):
         """Yuborilgan vakansiyani belgilash"""
         try:
             now = datetime.now(timezone.utc)
@@ -430,6 +565,121 @@ class Database:
             logger.error(f"❌ remove_premium: {e}")
             return False
 
+    async def get_users_for_digest(self) -> List[Dict]:
+        """Xulosa yuborilishi kerak bo'lgan userlarni olish (Uzbekistan vaqti bilan)"""
+        try:
+            from datetime import timedelta
+            now_utc = datetime.now(timezone.utc)
+            # Uzbekistan vaqti (UTC+5)
+            uz_now = now_utc + timedelta(hours=5)
+            today = uz_now.date()
+            current_time = uz_now.time()
+            
+            async with self.pool.acquire() as conn:
+                # 1. Digest yoqilgan, bugun hali yuborilmagan va vaqti kelgan userlar
+                return await conn.fetch('''
+                    SELECT ns.user_id, ns.digest_time, u.premium_until
+                    FROM notification_settings ns
+                    JOIN users u ON ns.user_id = u.user_id
+                    WHERE ns.daily_digest = TRUE 
+                      AND (ns.last_digest_sent IS NULL OR ns.last_digest_sent::DATE < $1)
+                      AND ns.digest_time <= $2::TIME
+                ''', today, current_time)
+        except Exception as e:
+            logger.error(f"get_users_for_digest error: {e}")
+            return []
+
+    async def update_last_digest_sent(self, user_id: int):
+        """Oxirgi xulosa vaqtini yangilash"""
+        try:
+            async with self.pool.acquire() as conn:
+                await conn.execute('''
+                    UPDATE notification_settings 
+                    SET last_digest_sent = NOW() 
+                    WHERE user_id = $1
+                ''', user_id)
+        except Exception as e:
+            logger.error(f"update_last_digest_sent error: {e}")
+
+    async def get_recent_vacancies_for_user(self, user_id: int, limit: int = 10) -> List[Dict]:
+        """User uchun oxirgi mos vakansiyalarni olish (Digest uchun)"""
+        try:
+            user_filter = await self.get_user_filter(user_id)
+            if not user_filter or not user_filter.get('keywords'):
+                return []
+            
+            keywords = [f"%{k}%" for k in user_filter.get('keywords', [])]
+            if not keywords: return []
+            
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch('''
+                    SELECT * FROM vacancies 
+                    WHERE (title ILIKE ANY($1) OR description ILIKE ANY($1))
+                      AND published_date > NOW() - INTERVAL '24 hours'
+                    ORDER BY published_date DESC
+                    LIMIT $2
+                ''', keywords, limit)
+                
+                return [dict(r) for r in rows]
+        except Exception as e:
+            logger.error(f"get_recent_vacancies_for_user error: {e}")
+            return []
+
+    async def get_referral_stats(self, user_id: int) -> Dict:
+        """Referral statistikasi"""
+        try:
+            async with self.pool.acquire() as conn:
+                # Jami referrallar soni
+                total = await conn.fetchval(
+                    'SELECT COUNT(*) FROM users WHERE referred_by = $1',
+                    user_id
+                )
+                # Premium bo'lgan referrallar soni
+                premium = await conn.fetchval('''
+                    SELECT COUNT(*) FROM users 
+                    WHERE referred_by = $1 AND premium_until > NOW()
+                ''', user_id)
+                
+                return {
+                    'total': total or 0,
+                    'premium': premium or 0
+                }
+        except Exception as e:
+            logger.error(f"get_referral_stats error: {e}")
+            return {'total': 0, 'premium': 0}
+
+    async def get_referral_list(self, user_id: int, limit: int = 20) -> List[Dict]:
+        """Referrallar ro'yxati"""
+        try:
+            async with self.pool.acquire() as conn:
+                rows = await conn.fetch('''
+                    SELECT user_id, first_name, username, created_at,
+                           (premium_until > NOW()) as is_premium
+                    FROM users 
+                    WHERE referred_by = $1
+                    ORDER BY created_at DESC
+                    LIMIT $2
+                ''', user_id, limit)
+                return [dict(row) for row in rows]
+        except Exception as e:
+            logger.error(f"get_referral_list error: {e}")
+            return []
+
+    async def get_top_referrers(self, limit: int = 10) -> List[Dict]:
+        """Eng ko'p referral to'plaganlar"""
+        try:
+            async with self.pool.acquire() as conn:
+                return await conn.fetch('''
+                    SELECT r.first_name, COUNT(u.user_id) as total
+                    FROM users u
+                    JOIN users r ON u.referred_by = r.user_id
+                    GROUP BY r.user_id, r.first_name
+                    ORDER BY total DESC
+                    LIMIT $1
+                ''', limit)
+        except Exception as e:
+            logger.error(f"get_top_referrers error: {e}")
+            return []
 
 # Global database instance
 db = Database()

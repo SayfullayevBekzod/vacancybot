@@ -1,7 +1,6 @@
 from aiogram import Router, F
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from database import db
-from filters import vacancy_filter
 import logging
 
 logger = logging.getLogger(__name__)
@@ -85,8 +84,11 @@ async def cmd_favorites(message: Message):
                 LEFT JOIN vacancies v ON sv.vacancy_id = v.vacancy_id
                 WHERE sv.user_id = $1
                 ORDER BY sv.sent_at DESC
-                LIMIT 50
+                LIMIT 5
             ''', message.from_user.id)
+            
+            total = await conn.fetchval('SELECT COUNT(*) FROM sent_vacancies WHERE user_id = $1', message.from_user.id)
+            total_pages = (total + 4) // 5
         
         if not favorites:
             await message.answer(
@@ -99,11 +101,10 @@ async def cmd_favorites(message: Message):
             )
             return
         
-        # Birinchi 5 tani ko'rsatish
         text = f"💾 <b>Saqlangan vakansiyalar</b>\n\n"
-        text += f"📊 Jami: <b>{len(favorites)}</b> ta\n\n"
+        text += f"📊 Jami: <b>{total}</b> ta\n\n"
         
-        for i, fav in enumerate(favorites[:5], 1):
+        for i, fav in enumerate(favorites, 1):
             title = fav['title'] or fav['vacancy_title'] or 'Vakansiya'
             company = fav['company'] or 'Kompaniya'
             location = fav['location'] or 'Joylashuv'
@@ -111,25 +112,11 @@ async def cmd_favorites(message: Message):
             text += f"{i}. <b>{title}</b>\n"
             text += f"   🏢 {company}\n"
             text += f"   📍 {location}\n"
-            
-            if fav['salary_min'] or fav['salary_max']:
-                salary = ""
-                if fav['salary_min']:
-                    salary += f"{fav['salary_min']:,}"
-                if fav['salary_max']:
-                    salary += f" - {fav['salary_max']:,}"
-                text += f"   💰 {salary} so'm\n"
-            
             text += f"   🔗 /view_{fav['vacancy_id']}\n\n"
-        
-        if len(favorites) > 5:
-            text += f"... va yana {len(favorites) - 5} ta\n\n"
-        
-        text += "💡 Vakansiyani ko'rish uchun linkni bosing yoki ID kiriting"
         
         await message.answer(
             text,
-            reply_markup=get_saved_list_keyboard(0, (len(favorites) + 4) // 5),
+            reply_markup=get_saved_list_keyboard(0, total_pages),
             parse_mode='HTML'
         )
         
@@ -177,11 +164,7 @@ async def unsave_favorite(callback: CallbackQuery):
         await callback.answer("🗑 O'chirildi", show_alert=True)
         
         # Ro'yxatni yangilash
-        await callback.message.edit_text(
-            "🗑 Vakansiya o'chirildi\n\n"
-            "💾 Saqlangan vakansiyalarni ko'rish uchun qaytadan bosing.",
-            parse_mode='HTML'
-        )
+        await refresh_favorites(callback)
         
     except Exception as e:
         logger.error(f"Unsave favorite error: {e}")
@@ -214,7 +197,7 @@ async def confirm_clear_favorites(callback: CallbackQuery):
     """Tozalashni tasdiqlash"""
     try:
         async with db.pool.acquire() as conn:
-            result = await conn.execute('''
+            await conn.execute('''
                 DELETE FROM sent_vacancies
                 WHERE user_id = $1
             ''', callback.from_user.id)
@@ -233,24 +216,19 @@ async def confirm_clear_favorites(callback: CallbackQuery):
 @router.callback_query(F.data == "refresh_favorites")
 async def refresh_favorites(callback: CallbackQuery):
     """Yangilash"""
-    # Xuddi cmd_favorites kabi, lekin callback uchun
     try:
         async with db.pool.acquire() as conn:
             favorites = await conn.fetch('''
-                SELECT 
-                    sv.vacancy_id,
-                    sv.vacancy_title,
-                    v.title,
-                    v.company,
-                    v.location,
-                    v.salary_min,
-                    v.salary_max
+                SELECT sv.vacancy_id, sv.vacancy_title, v.title, v.company, v.location, v.salary_min, v.salary_max
                 FROM sent_vacancies sv
                 LEFT JOIN vacancies v ON sv.vacancy_id = v.vacancy_id
                 WHERE sv.user_id = $1
                 ORDER BY sv.sent_at DESC
-                LIMIT 50
+                LIMIT 5
             ''', callback.from_user.id)
+            
+            total = await db.pool.fetchval('SELECT COUNT(*) FROM sent_vacancies WHERE user_id = $1', callback.from_user.id)
+            total_pages = (total + 4) // 5
         
         if not favorites:
             await callback.message.edit_text(
@@ -261,29 +239,79 @@ async def refresh_favorites(callback: CallbackQuery):
             return
         
         text = f"💾 <b>Saqlangan vakansiyalar</b>\n\n"
-        text += f"📊 Jami: <b>{len(favorites)}</b> ta\n\n"
+        text += f"📊 Jami: <b>{total}</b> ta\n\n"
         
-        for i, fav in enumerate(favorites[:5], 1):
+        for i, fav in enumerate(favorites, 1):
             title = fav['title'] or fav['vacancy_title'] or 'Vakansiya'
             company = fav['company'] or 'Kompaniya'
-            
-            text += f"{i}. <b>{title}</b>\n"
-            text += f"   🏢 {company}\n\n"
-        
-        if len(favorites) > 5:
-            text += f"... va yana {len(favorites) - 5} ta"
+            text += f"{i}. <b>{title}</b>\n   🏢 {company}\n   🔗 /view_{fav['vacancy_id']}\n\n"
         
         await callback.message.edit_text(
             text,
-            reply_markup=get_saved_list_keyboard(0, (len(favorites) + 4) // 5),
+            reply_markup=get_saved_list_keyboard(0, total_pages),
             parse_mode='HTML'
         )
-        
+        await callback.answer("✅ Yangilandi")
     except Exception as e:
         logger.error(f"Refresh favorites error: {e}")
         await callback.answer("❌ Xatolik", show_alert=True)
-    
-    await callback.answer("✅ Yangilandi")
+
+
+@router.callback_query(F.data.startswith("saved_page_"))
+async def saved_page(callback: CallbackQuery):
+    """Sahifani almashtirish"""
+    try:
+        page = int(callback.data.replace("saved_page_", ""))
+        async with db.pool.acquire() as conn:
+            favorites = await conn.fetch('''
+                SELECT sv.vacancy_id, sv.vacancy_title, v.title, v.company, v.location, v.salary_min, v.salary_max
+                FROM sent_vacancies sv
+                LEFT JOIN vacancies v ON sv.vacancy_id = v.vacancy_id
+                WHERE sv.user_id = $1
+                ORDER BY sv.sent_at DESC
+                LIMIT 5 OFFSET $2
+            ''', callback.from_user.id, page * 5)
+            total = await db.pool.fetchval('SELECT COUNT(*) FROM sent_vacancies WHERE user_id = $1', callback.from_user.id)
+            total_pages = (total + 4) // 5
+        
+        if not favorites:
+            await callback.answer("Boshqa natija yo'q")
+            return
+            
+        text = f"💾 <b>Saqlangan vakansiyalar</b>\n\n📊 Jami: <b>{total}</b> ta\n\n"
+        for i, fav in enumerate(favorites, page * 5 + 1):
+            title = fav['title'] or fav['vacancy_title'] or 'Vakansiya'
+            company = fav['company'] or 'Kompaniya'
+            text += f"{i}. <b>{title}</b>\n   🏢 {company}\n   🔗 /view_{fav['vacancy_id']}\n\n"
+            
+        await callback.message.edit_text(text, reply_markup=get_saved_list_keyboard(page, total_pages), parse_mode='HTML')
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"saved_page error: {e}")
+        await callback.answer("❌ Xatolik")
+
+
+@router.callback_query(F.data.startswith("view_full_"))
+async def view_full_saved(callback: CallbackQuery):
+    """Saqlangan vakansiyani to'liq ko'rish"""
+    try:
+        vacancy_id = callback.data.replace("view_full_", "")
+        vac = await db.get_vacancy(vacancy_id)
+        if not vac:
+            await callback.answer("⚠️ Vakansiya topilmadi", show_alert=True)
+            return
+            
+        from filters import vacancy_filter
+        text = vacancy_filter.format_vacancy_message(vac)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🗑 O'chirish", callback_data=f"unsave_favorite_{vacancy_id}")],
+            [InlineKeyboardButton(text="🔙 Ro'yxatga", callback_data="refresh_favorites")]
+        ])
+        await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+        await callback.answer()
+    except Exception as e:
+        logger.error(f"view_full_saved error: {e}")
+        await callback.answer("❌ Xatolik")
 
 
 @router.callback_query(F.data == "close_favorites")

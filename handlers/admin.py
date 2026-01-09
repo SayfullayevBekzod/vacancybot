@@ -134,11 +134,20 @@ async def admin_stats(callback: CallbackQuery):
         
         free_count = total_users - premium_count
         
+        # Bugungi yangi userlar
+        new_users_today = 0
+        today = datetime.now(timezone.utc).date()
+        for user_id in all_users:
+            user = await db.get_user(user_id)
+            if user and user.get('created_at') and user['created_at'].date() == today:
+                new_users_today += 1
+        
         text = f"""
 📊 <b>Bot Statistikasi</b>
 
 👥 <b>Foydalanuvchilar:</b>
 • Jami: {total_users}
+• 📅 Bugun yangi: +{new_users_today}
 • 💎 Premium: {premium_count}
 • 🆓 Free: {free_count}
 

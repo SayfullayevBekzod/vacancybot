@@ -1,8 +1,10 @@
 from aiogram import Router, F
+import re
 from aiogram.types import Message, InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.fsm.context import FSMContext
 from database import db
 import logging
+from uzjobs_scraper import uz_jobs_scraper
 import asyncio
 from datetime import datetime
 
@@ -144,10 +146,38 @@ async def send_vacancy_to_user(message_or_callback, user_id: int, index: int):
 
 
 @router.message(F.text == "🔍 Vakansiya qidirish")
-async def search_vacancies(message: Message):
-    """Vakansiya qidirish - OPTIMIZED VERSION"""
-    user_id = message.from_user.id
-    
+async def search_choice(message: Message):
+    """Qidiruv turini tanlash"""
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔍 Vakansiya qidirish", callback_data="start_search_vacancies"),
+            InlineKeyboardButton(text="👨‍💼 Nomzodlarni ko'rish", callback_data="start_search_candidates")
+        ],
+        [InlineKeyboardButton(text="❌ Bekor qilish", callback_data="cancel_choice")]
+    ])
+    await message.answer("🔍 <b>Qidiruv bo'limi</b>\n\nNima qidirmoqchisiz?", reply_markup=keyboard, parse_mode='HTML')
+
+@router.callback_query(F.data == "cancel_choice")
+async def cancel_choice(callback: CallbackQuery):
+    await callback.message.delete()
+    await callback.answer()
+
+@router.callback_query(F.data == "start_search_candidates")
+async def trigger_candidates_search(callback: CallbackQuery):
+    from handlers.candidates import show_candidates
+    await show_candidates(callback.message, user_id=callback.from_user.id)
+    await callback.message.delete()
+    await callback.answer()
+
+@router.callback_query(F.data == "start_search_vacancies")
+async def trigger_vacancies_search(callback: CallbackQuery):
+    await callback.message.delete()
+    # Call the original search logic
+    await perform_vacancy_search(callback.message, callback.from_user.id)
+    await callback.answer()
+
+async def perform_vacancy_search(message: Message, user_id: int):
+    """Vakansiya qidirishning asosiy mantiqi"""
     # Agar user allaqachon qidirayotgan bo'lsa
     if user_id in searching_users:
         await message.answer(
@@ -195,6 +225,10 @@ async def search_vacancies(message: Message):
         locations = user_filter.get('locations', ['Tashkent'])
         sources = user_filter.get('sources', ['hh_uz', 'user_post'])
         
+        # Premium bo'lsa, Telegram manbasini avtomatik qo'shish (search da ham)
+        if is_premium and 'telegram' not in sources:
+            sources.append('telegram')
+            
         logger.info(f"[SEARCH] User {user_id}: keywords={keywords}, locations={locations}, sources={sources}")
         
         # Sahifalar soni
@@ -268,34 +302,67 @@ async def search_vacancies(message: Message):
         # 3. Telegram kanallaridan (PARALLEL, Premium only)
         async def get_telegram():
             if 'telegram' in sources and is_premium:
-                if telegram_scraper_instance and telegram_scraper_instance.is_available():
-                    try:
-                        logger.info("[SEARCH] Telegram scraping...")
+                try:
+                    logger.info("[SEARCH] Fetching Telegram vacancies from DB...")
+                    async with db.pool.acquire() as conn:
+                        # Bazadan Telegram vakansiyalarni olish
+                        tg_db_vacancies = await conn.fetch('''
+                            SELECT 
+                                vacancy_id as external_id,
+                                title,
+                                company,
+                                description,
+                                salary_min,
+                                salary_max,
+                                location,
+                                experience_level,
+                                url,
+                                source,
+                                published_date
+                            FROM vacancies
+                            WHERE source = 'telegram'
+                            AND published_date > NOW() - INTERVAL '7 days'
+                            ORDER BY published_date DESC
+                            LIMIT 300
+                        ''')
                         
-                        await telegram_scraper_instance.connect()
-                        tg_vacancies = await telegram_scraper_instance.scrape_channels(limit_per_channel=30)
-                        await telegram_scraper_instance.disconnect()
+                        tg_vacancies = [dict(row) for row in tg_db_vacancies]
                         
                         if tg_vacancies:
                             # Telegram kanallarini guruhlashtirish
                             tg_channels = {}
                             for vac in tg_vacancies:
                                 external_id = vac.get('external_id', '')
+                                # Parsing tg_@channel_id format
                                 if external_id.startswith('tg_'):
                                     parts = external_id.split('_')
                                     if len(parts) >= 2:
                                         channel = parts[1]
                                         tg_channels[channel] = tg_channels.get(channel, 0) + 1
                             
-                            logger.info(f"[SEARCH] Telegram: {len(tg_vacancies)} ta ({len(tg_channels)} kanal)")
+                            logger.info(f"[SEARCH] Telegram DB: {len(tg_vacancies)} ta")
                             return ('Telegram', '📱', tg_vacancies, tg_channels)
                         return None
-                    except Exception as e:
-                        logger.error(f"[SEARCH] Telegram error: {e}")
-                        return None
+                except Exception as e:
+                    logger.error(f"[SEARCH] Telegram DB error: {e}")
+                    return None
             return None
         
         tasks.append(get_telegram())
+        
+        # 4. UzJobs (NEW)
+        async def get_uzjobs():
+            try:
+                logger.info("[SEARCH] Fetching from UzJobs...")
+                res = await uz_jobs_scraper.scrape_uzjobs(keywords)
+                if res:
+                    return ('UzJobs', '🌐', res)
+                return None
+            except Exception as e:
+                logger.error(f"[SEARCH] UzJobs error: {e}")
+                return None
+        
+        tasks.append(get_uzjobs())
         
         # PARALLEL EXECUTION - HAMMASI BIR VAQTDA!
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -485,3 +552,34 @@ async def new_search(callback: CallbackQuery):
         pass
     
     await callback.answer()
+
+@router.message(F.text.regexp(r'^/view_(.+)$'))
+async def view_vacancy_handler(message: Message):
+    """Vakansiyani ID orqali ko'rish"""
+    try:
+        from filters import vacancy_filter
+        # Regex orqali ID ni olish
+        match = re.match(r'^/view_(.+)$', message.text)
+        if not match:
+            return
+            
+        vacancy_id = match.group(1)
+        vac = await db.get_vacancy(vacancy_id)
+        
+        if not vac:
+            await message.answer("⚠️ Vakansiya topilmadi yoki o'chirib yuborilgan.")
+            return
+            
+        text = vacancy_filter.format_vacancy_message(vac)
+        
+        from handlers.favorites import get_favorite_keyboard
+        await message.answer(
+            text,
+            reply_markup=get_favorite_keyboard(vacancy_id),
+            parse_mode='HTML',
+            disable_web_page_preview=True
+        )
+        
+    except Exception as e:
+        logger.error(f"view_vacancy_handler error: {e}")
+        await message.answer("❌ Xatolik yuz berdi")

@@ -2,6 +2,7 @@ from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from database import db
 import logging
 
@@ -39,7 +40,7 @@ async def get_main_keyboard(user_id: int):
             KeyboardButton(text="📊 Statistika")
         ])
     
-    # Referral barcha uchun
+    # Referral va Yordam barcha uchun
     keyboard_buttons.append([
         KeyboardButton(text="🤝 Taklif qilish"),
         KeyboardButton(text="ℹ️ Yordam")
@@ -51,6 +52,10 @@ async def get_main_keyboard(user_id: int):
     )
     return keyboard
 
+
+# FSM States
+class StartStates(StatesGroup):
+    waiting_for_role = State()
 
 @router.message(CommandStart())
 async def cmd_start(message: Message, state: FSMContext):
@@ -67,7 +72,7 @@ async def cmd_start(message: Message, state: FSMContext):
             except:
                 pass
     
-    # Foydalanuvchini bazaga qo'shish
+    # Foydalanuvchini bazaga qo'shish (agar bo'lmasa)
     await db.add_user(
         user_id=user.id,
         username=user.username,
@@ -79,65 +84,79 @@ async def cmd_start(message: Message, state: FSMContext):
     if referrer_id:
         from handlers.referral import process_referral_start
         await process_referral_start(message, referrer_id)
-    
-    logger.info(f"User start: {user.id} - {user.username} (Ref: {referrer_id})")
-    
+        
     # Premium status
     is_premium = await db.is_premium(user.id)
     premium_badge = "💎" if is_premium else ""
     
-    welcome_text = f"""
-👋 Assalomu alaykum, <b>{user.first_name}</b> {premium_badge}!
-
-🤖 Men <b>Vacancy Bot</b>man. 
-
-🎯 <b>Men nima qila olaman?</b>
-• hh.uz dan vakansiyalarni avtomatik yig'aman
-• Telegram kanallaridan vakansiya topaman (Premium)
-• Sizning talablaringizga mos vakansiyalarni filtrlayman
-• Har kuni yangi vakansiyalar haqida xabar beraman
-"""
+    welcome_text = f"👋 Assalomu alaykum, <b>{user.first_name}</b> {premium_badge}!\n\n"
+    welcome_text += "🤖 Men <b>Vacancy Bot</b>man. \n\n"
+    welcome_text += "🎯 <b>Men nima qila olaman?</b>\n"
+    welcome_text += "• hh.uz dan vakansiyalarni avtomatik yig'aman\n"
+    welcome_text += "• Telegram kanallaridan vakansiya topaman (Premium)\n"
+    welcome_text += "• Sizning talablaringizga mos vakansiyalarni filtrlayman\n"
+    welcome_text += "• Har kuni yangi vakansiyalar haqida xabar beraman\n\n"
 
     if is_premium:
-        welcome_text += """
-• 📢 Vakansiya e'lon qilishingiz mumkin
-• 🎯 AI tavsiyalar (Smart Matching)
-• 🔔 Push bildirishnomalar
-
-💎 <b>Siz Premium foydalanuvchisiz!</b>
-"""
+        welcome_text += "• 📢 Vakansiya e'lon qilishingiz mumkin\n"
+        welcome_text += "• 🎯 AI tavsiyalar (Smart Matching)\n"
+        welcome_text += "• 🔔 Push bildirishnomalar\n\n"
+        welcome_text += "💎 <b>Siz Premium foydalanuvchisiz!</b>\n\n"
     else:
-        welcome_text += """
+        welcome_text += "🆓 <b>Free versiya:</b>\n"
+        welcome_text += "• 5 ta qidiruv/kun\n"
+        welcome_text += "• 10 ta natija\n"
+        welcome_text += "• Faqat hh.uz\n\n"
+        welcome_text += "💡 Premium'ga o'tib, barcha imkoniyatlardan foydalaning!\n\n"
 
-🆓 <b>Free versiya:</b>
-• 5 ta qidiruv/kun
-• 10 ta natija
-• Faqat hh.uz
+    welcome_text += "🚀 <b>Yangi funksiyalar:</b>\n"
+    welcome_text += "• 📝 <b>Vakansiya va Rezyume:</b> O'z e'loningizni qoldiring\n"
+    welcome_text += "• 👨‍💼 <b>Nomzodlar:</b> Ish beruvchilar uchun nomzodlar bazasi\n"
+    welcome_text += "• 🔔 <b>Match Alert:</b> Mos vakansiya haqida tezkor xabar\n\n"
 
-💡 Premium'ga o'tib, barcha imkoniyatlardan foydalaning!
-"""
-    
-    welcome_text += """
-⚙️ <b>Boshlash uchun:</b>
-1. "Sozlamalar" tugmasini bosing
-2. O'zingizga mos filtrlarni o'rnating
-3. Men sizga mos vakansiyalarni yuboraman!
+    welcome_text += "⚙️ <b>Boshlash uchun:</b>\n"
+    welcome_text += "1. \"Sozlamalar\" tugmasini bosing\n"
+    welcome_text += "2. O'zingizga mos filtrlarni o'rnating\n"
+    welcome_text += "3. Men sizga mos vakansiyalarni yuboraman!\n\n"
 
-📱 <b>Asosiy funksiyalar:</b>
-• 🔍 Vakansiya qidirish - hozir qidirish
-• 💾 Saqlangan - yoqqan vakansiyalar
-• 🤝 Taklif qilish - do'stlar va bonus
-"""
+    welcome_text += "📱 <b>Asosiy funksiyalar:</b>\n"
+    welcome_text += "• 🔍 Vakansiya qidirish - hozir qidirish\n"
+    welcome_text += "• 💾 Saqlangan - yoqqan vakansiyalar\n"
+    welcome_text += "• 🤝 Taklif qilish - do'stlar va bonus\n"
 
     if is_premium:
         welcome_text += "• 🎯 Smart tavsiya - AI tavsiyalar\n"
         welcome_text += "• 🔔 Bildirishnomalar - real-time xabarlar\n"
     
-    welcome_text += "• ℹ️ Yordam - qo'llanma\n\nKeling, boshlaymiz! 🚀"
+    welcome_text += "• ℹ️ Yordam - qo'llanma\n\n"
+    welcome_text += "Keling, boshlaymiz! 🚀"
     
     await message.answer(
         welcome_text,
         reply_markup=await get_main_keyboard(user.id),
+        parse_mode='HTML'
+    )
+
+
+async def send_main_menu(message: Message, user_id: int, prefix_text: str = ""):
+    """Asosiy menyuni yuborish"""
+    is_premium = await db.is_premium(user_id)
+    
+    # Get Updated Role
+    role = await db.pool.fetchval("SELECT role FROM users WHERE user_id = $1", user_id)
+    
+    welcome_text = prefix_text + f"\n\n🤖 <b>Vacancy Bot</b>ga xush kelibsiz!\n\n"
+    
+    if role == 'employer':
+        welcome_text += "💼 Bu yerda siz o'z vakansiyalaringizni e'lon qilishingiz va xodimlarni topishingiz mumkin.\n"
+    else:
+        welcome_text += "🔍 Bu yerda siz o'zingizga mos ishni topishingiz mumkin.\n"
+        
+    welcome_text += "\nQuyidagi menyudan foydalaning 👇"
+
+    await message.answer(
+        welcome_text,
+        reply_markup=await get_main_keyboard(user_id), # We might need to adjust main keyboard based on role too!
         parse_mode='HTML'
     )
 
@@ -170,7 +189,7 @@ Do'stlarni taklif qiling va Premium bonus oling:
 • 5 ta do'st = 3 kun
 • 10 ta do'st = 6 kun
 • 20 ta do'st = 12 kun
-• 10 ta do'st = 30 kun!
+• 30 ta do'st = 30 kun!
 
 <b>📊 Statistika</b>
 • Vakansiya statistikasi

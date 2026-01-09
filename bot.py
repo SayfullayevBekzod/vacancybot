@@ -63,12 +63,13 @@ try:
 except:
     INTERVIEW_ENABLED = False
 
+
 try:
-    from handlers import cv_analysis
-    CV_ANALYSIS_ENABLED = True
-    logger.info("✅ CV Analysis handler")
+    from handlers import candidates
+    CANDIDATES_ENABLED = True
+    logger.info("✅ Candidates handler")
 except:
-    CV_ANALYSIS_ENABLED = False
+    CANDIDATES_ENABLED = False
 
 # Handlerlarni ro'yxatdan o'tkazish (TARTIB MUHIM!)
 logger.info("Handlerlar ro'yxatga olinmoqda...")
@@ -104,9 +105,10 @@ if INTERVIEW_ENABLED:
     dp.include_router(interview.router)
     logger.info("  ✅ Interview handler")
 
-if CV_ANALYSIS_ENABLED:
-    dp.include_router(cv_analysis.router)
-    logger.info("  ✅ CV Analysis handler")
+
+if CANDIDATES_ENABLED:
+    dp.include_router(candidates.router)
+    logger.info("  ✅ Candidates handler")
 
 dp.include_router(start.router)
 logger.info("  ✅ Start handler")
@@ -130,6 +132,7 @@ async def auto_scrape_and_notify():
         try:
             from config import TELEGRAM_ENABLED
             from telegram_scraper import telegram_scraper
+            from uzjobs_scraper import uz_jobs_scraper
             
             if TELEGRAM_ENABLED and telegram_scraper and telegram_scraper.is_available():
                 logger.info("📱 Telegram scraping boshlanmoqda...")
@@ -193,8 +196,14 @@ async def auto_scrape_and_notify():
                         save_tasks = [db.add_vacancy(**v) for v in vacancies_list]
                         await asyncio.gather(*save_tasks, return_exceptions=True)
                     
-                    # Umumiy ro'yxat: hh.uz + Telegram
-                    combined_vacancies = (vacancies_list or []) + telegram_vacancies
+                    # 3. UzJobs scraping (NEW)
+                    uzjobs_list = await uz_jobs_scraper.scrape_uzjobs(keywords=keywords)
+                    if uzjobs_list:
+                        uz_save_tasks = [db.add_vacancy(**v) for v in uzjobs_list]
+                        await asyncio.gather(*uz_save_tasks, return_exceptions=True)
+                    
+                    # Umumiy ro'yxat: hh.uz + Telegram + UzJobs
+                    combined_vacancies = (vacancies_list or []) + (uzjobs_list or []) + telegram_vacancies
                     
                     if combined_vacancies:
                         await distribute_vacancies_to_group(user_ids, combined_vacancies)
@@ -225,6 +234,21 @@ async def distribute_vacancies_to_group(user_ids: list, vacancies: list):
             user_filter = await db.get_user_filter(user_id)
             if not user_filter:
                 continue
+            
+            # Premium tekshirish
+            is_premium = await db.is_premium(user_id)
+            
+            # Agar Premium bo'lsa, Telegram manbasini avtomatik qo'shish (agar yo'q bo'lsa)
+            sources = user_filter.get('sources', ['hh_uz', 'user_post'])
+            if is_premium:
+                if 'telegram' not in sources:
+                    sources.append('telegram')
+                    user_filter['sources'] = sources
+            else:
+                # Agar Premium bo'lmasa, Telegram ni olib tashlash
+                if 'telegram' in sources:
+                    sources = [s for s in sources if s != 'telegram']
+                    user_filter['sources'] = sources
                 
             # Filtr qo'llash
             filtered_vacancies = vacancy_filter.apply_filters(vacancies, user_filter)
@@ -274,20 +298,32 @@ async def on_startup():
     
     # Scheduler ishga tushirish
     logger.info("2. Scheduler ishga tushirish...")
+    # Avtomatik scraping
     scheduler.add_job(
         auto_scrape_and_notify,
         'interval',
         seconds=SCRAPING_INTERVAL,
         id='auto_scraping',
-        max_instances=1,  # Faqat bitta instance
-        coalesce=True,    # Bir nechta o'tkazib yuborilgan taskni birlashtirish
-        misfire_grace_time=300  # 5 minut grace time
+        max_instances=1,
+        coalesce=True,
+        misfire_grace_time=300
     )
+    
+    # Kunlik xulosalar (har 15 minutda tekshirish)
+    from handlers.notifications import send_daily_digests
+    scheduler.add_job(
+        send_daily_digests,
+        'interval',
+        minutes=15,
+        id='daily_digest',
+        max_instances=1,
+        coalesce=True
+    )
+    
     scheduler.start()
     logger.info(f"   ✅ Scheduler ishga tushdi (interval: {SCRAPING_INTERVAL}s)")
     
-    # Dastlabki scrapingni darhol ishga tushirish (test uchun)
-    asyncio.create_task(auto_scrape_and_notify())
+    # Dastlabki scrapingni scheduler o'zi hal qiladi
     
     # Funksiyalar ro'yxati
     logger.info("\n" + "="*60)

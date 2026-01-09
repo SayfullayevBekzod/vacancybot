@@ -36,7 +36,7 @@ def get_settings_keyboard(is_premium: bool = False):
             InlineKeyboardButton(text="📊 Joriy sozlamalar", callback_data="show_current_settings")
         ],
         [
-            InlineKeyboardButton(text="📄 CV orqali sozlash (Auto)", callback_data="upload_cv_info")
+            InlineKeyboardButton(text=" Rol (Ish qidiruvchi/Ish beruvchi)", callback_data="set_role")
         ],
         [
             InlineKeyboardButton(text="🗑 Tozalash", callback_data="clear_settings"),
@@ -644,31 +644,6 @@ async def need_premium(callback: CallbackQuery):
     )
 
 
-@router.callback_query(F.data == "upload_cv_info")
-async def upload_cv_info(callback: CallbackQuery):
-    """CV yuklash haqida ma'lumot"""
-    text = """
-📄 <b>CV orqali avtomatik sozlash</b>
-
-Bot sizning Rezyume (CV) faylingizni tahlil qilib, kerakli ko'nikmalar va tajribani avtomatik aniqlab beradi.
-
-<b>Yo'riqnoma:</b>
-1. Shu xabarga javoban CV faylingizni yuboring.
-2. Format: <b>PDF</b> yoki <b>Word (DOCX)</b>.
-3. Bot faylni o'qiydi va sozlamalarni o'zi to'g'irlaydi.
-
-<i>Hozirning o'zida faylni tashlashingiz mumkin!</i> 👇
-"""
-    await callback.message.edit_text(
-        text,
-        reply_markup=InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_settings")]
-            ]
-        ),
-        parse_mode='HTML'
-    )
-    await callback.answer()
 
 
 # ========== TOZALASH ==========
@@ -710,6 +685,56 @@ async def close_settings(callback: CallbackQuery):
     """Yopish"""
     await callback.message.delete()
     await callback.answer()
+
+
+@router.callback_query(F.data == "set_role")
+async def set_role_start(callback: CallbackQuery):
+    """Rolni tanlash"""
+    text = "👤 <b>Roliingizni tanlang:</b>\n\n"
+    text += "🔍 <b>Ish qidiruvchi</b> - Vakansiyalar qidirish, saqlash va tavsiyalar olish.\n"
+    text += "💼 <b>Ish beruvchi</b> - Nomzodlarni qidirish va vakansiya e'lon qilish.\n\n"
+    text += "Hozirgi rolingizga qarab bot imkoniyatlari o'zgaradi."
+    
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔍 Ish qidiruvchi", callback_data="confirm_role_seeker"),
+                InlineKeyboardButton(text="💼 Ish beruvchi", callback_data="confirm_role_employer")
+            ],
+            [InlineKeyboardButton(text="🔙 Orqaga", callback_data="back_to_settings")]
+        ]
+    )
+    
+    await callback.message.edit_text(text, reply_markup=keyboard, parse_mode='HTML')
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("confirm_role_"))
+async def confirm_role(callback: CallbackQuery):
+    """Rolni tasdiqlash"""
+    role = callback.data.replace("confirm_role_", "")
+    user_id = callback.from_user.id
+    
+    try:
+        async with db.pool.acquire() as conn:
+            await conn.execute("UPDATE users SET role = $1 WHERE user_id = $2", role, user_id)
+        
+        role_text = "Ish qidiruvchi" if role == 'seeker' else "Ish beruvchi"
+        await callback.answer(f"✅ Rolingiz {role_text} ga o'zgartirildi!", show_alert=True)
+        
+        # Asosiy menyuni yuborish (start.py dagi kabi)
+        from handlers.start import get_main_keyboard
+        await callback.message.answer(
+            f"✅ <b>Tabriklaymiz!</b>\n\nSizning rolingiz: <b>{role_text}</b>\n"
+            "Endi sizga mos menyu ko'rinadi.",
+            reply_markup=await get_main_keyboard(user_id),
+            parse_mode='HTML'
+        )
+        await callback.message.delete()
+        
+    except Exception as e:
+        logger.error(f"confirm_role error: {e}")
+        await callback.answer("❌ Xatolik!")
 
 
 @router.message(F.text == "/cancel")

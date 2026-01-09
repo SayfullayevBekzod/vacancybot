@@ -251,6 +251,9 @@ class VacancyFilter:
         elif source == 'hh_uz':
             source_emoji = '🌐'
             source_text = 'HH.UZ'
+        elif source == 'user_post':
+            source_emoji = '📢'
+            source_text = 'Bot e\'loni'
         else:
             source_emoji = '🔗'
             source_text = source.upper().replace('_', ' ')

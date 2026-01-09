@@ -40,8 +40,7 @@ class TelegramVacancyScraper:
         except ImportError:
             # Fallback agar configda bo'lmasa
             self.vacancy_channels = [
-                '@vacancyuz', '@itjobsuz', '@uzdevjobs', '@tashkent_jobs',
-                '@ish_uz', '@ishbozor', '@jobs_uz', '@vacancy_uz'
+                '@UstozShogirdSohalar', '@ishmi_ish', '@techjobs_vakansiya', '@vakansiyaa_ishbor', '@freelancer_Uzbek', '@freelance_uzb'
             ]
         
         # Vakansiya trigger so'zlari (kengroq)
