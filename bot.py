@@ -1,6 +1,8 @@
 import asyncio
 import logging
 from loader import bot, dp, scheduler, logger
+from flask import Flask
+from threading import Thread
 
 # Config import
 from config import SCRAPING_INTERVAL
@@ -362,9 +364,25 @@ async def main():
     finally:
         # Shutdown
         await on_shutdown()
+app = Flask('')
 
+@app.route('/')
+def home():
+    return "Bot ishlayapti ✅"
+
+@app.route('/health')
+def health():
+    return "OK", 200
+
+def run():
+    app.run(host='0.0.0.0', port=8080)
+
+def keep_alive():
+    t = Thread(target=run)
+    t.start()
 
 if __name__ == '__main__':
+    keep_alive()
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
