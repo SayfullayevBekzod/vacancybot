@@ -16,8 +16,12 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 # DB_PASSWORD = os.getenv('DB_PASSWORD')
 
 # Database connection string
-DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+# DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+if not BOT_TOKEN:
+    raise ValueError("❌ BOT_TOKEN topilmadi!")
 
+if not DATABASE_URL:
+    raise ValueError("❌ DATABASE_URL topilmadi!")
 # Timezone sozlamalari
 DEFAULT_TIMEZONE = timezone.utc  # UTC timezone
 
