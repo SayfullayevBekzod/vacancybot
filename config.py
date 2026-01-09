@@ -7,13 +7,13 @@ load_dotenv()
 
 # Bot sozlamalari
 BOT_TOKEN = os.getenv('BOT_TOKEN')
-
-# Database sozlamalari
-DB_HOST = os.getenv('DB_HOST', 'localhost')
-DB_PORT = int(os.getenv('DB_PORT', 5432))
-DB_NAME = os.getenv('DB_NAME', 'vacancy_bot')
-DB_USER = os.getenv('DB_USER', 'postgres')
-DB_PASSWORD = os.getenv('DB_PASSWORD')
+DATABASE_URL = os.getenv('DATABASE_URL')
+# # Database sozlamalari
+# DB_HOST = os.getenv('DB_HOST', 'localhost')
+# DB_PORT = int(os.getenv('DB_PORT', 5432))
+# DB_NAME = os.getenv('DB_NAME', 'vacancy_bot')
+# DB_USER = os.getenv('DB_USER', 'postgres')
+# DB_PASSWORD = os.getenv('DB_PASSWORD')
 
 # Database connection string
 DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
